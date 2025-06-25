@@ -42,7 +42,7 @@ inline int toRealData(unsigned char DataH, unsigned char DataL){
 void can_send(){
     canMsgOut.can_id = 0x200;
     canMsgOut.can_dlc = 8;
-    for (size_t i = 0; i < NoM; i++){
+    for (size_t i = 0; i < NoM/2; i++){
         //if(i> 3) break;
         canMsgOut.data[i*2]   = (char)(set_current[i] / 256); // High 8 bit
         canMsgOut.data[i*2+1] = (char)(set_current[i] % 256); // Low  8 bit
@@ -73,7 +73,31 @@ void drawLCD(){
   M5.Lcd.printf("id, pos, mov  ");
 
   M5.Lcd.setCursor(35,210);
-  M5.Lcd.print("push      pull");
+  M5.Lcd.print("push          pull");
+}
+
+//一定速度でモーター1個動作させるための関数
+void moveShelfs(float trgPos_[], float speed[], int ID_){
+  float dif = trgPos_[ID_] - motor[ID_] -> get_pos();
+  Serial.printf("trgPos = %5.1f, crtPos = %5.1f, dif = %5.1f \n", trgPos_[ID_], motor[ID_] -> get_pos(), dif);
+  float step_size = 1.0;//mm
+  float samples = fabs(dif / step_size);
+  if(samples < 10)samples =10;
+  Serial.printf("samples = %5.1f", samples);
+  int period_ms = 1000* step_size/speed[ID_];
+  unsigned long myTimer = millis();
+  float tg_pos;
+  float startPos = motor[ID_] ->get_pos();
+  for (size_t i = 1; i <= samples; i++){
+    tg_pos = startPos + (trgPos_[ID_] - startPos)* i/samples;
+    printf("i = %4d, tg_pos = %4.1f\n", i, tg_pos);
+    motor[ID_]  -> set_trg(gm_max_cur*0.3, tg_pos);
+    myTimer += period_ms;
+    //Serial.printf("%5.1f, %5.1f\n", tg_posX, tg_posY);
+    while (millis() < myTimer){
+      delay(1);
+    }
+  }
 }
 
 //コア0のスレッドa
@@ -125,8 +149,8 @@ void setup() {
   //モーターのPIDゲインと変換パラメータ設定してインスタンス生成
   for (size_t i = 0; i < NoM/2; i++){
     Serial.println(i);
-    motor[i*2]   = new DJI_mController(mm_to_pulse_Pos, 0.1, 0, 0.0); //mm_to_pulse_Pos
-    motor[i*2+1] = new DJI_mController(mm_to_pulse_Mov, 0.1, 0, 0.0); 
+    motor[i*2]   = new DJI_mController(mm_to_pulse_Pos, 0.1, 0, 0.1); //mm_to_pulse_Pos
+    motor[i*2+1] = new DJI_mController(mm_to_pulse_Mov, 0.1, 0, 0.1); 
   }
 
   Serial.print("can connecting");
@@ -160,12 +184,21 @@ void setup() {
   }
 }
 
+
+float trgPos[] = {0,0,0,0};
+float speed[] = {200, 100, 100, 100};
+
 //メインループ定義
 void loop() {
 
   if(M5.BtnA.read() == 1){
-    motor[0]   -> set_trg(gm_max_cur*0.8, 400);
-    //motor[1]   -> set_trg(gm_max_cur*0.1, 300);
+    
+    // trgPos[0] = 500;
+    // moveShelfs(*motor, trgPos, speed, 0);
+
+    trgPos[1] = 200;
+    moveShelfs(trgPos, speed, 1);
+
     while(M5.BtnA.read()){
       delay(10);
     }
@@ -183,8 +216,8 @@ void loop() {
   }
 
   if(M5.BtnC.read() == 1){
-    motor[0]   -> set_trg(gm_max_cur*0.8, 50);
-    //motor[1]   -> set_trg(gm_max_cur*0.1, 0);
+    trgPos[0] = 100;
+    moveShelfs(trgPos, speed, 0);
     while(M5.BtnC.read()){
       delay(10);
     }

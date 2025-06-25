@@ -77,7 +77,7 @@ void drawLCD(){
 }
 
 //コア0のスレッドa
-void Core0a(void *args){
+void Core0(void *args){
   while (1) {
     delayMicroseconds(1);
     can_read();
@@ -85,12 +85,13 @@ void Core0a(void *args){
 }
 
 //コア1のスレッドa
-void Core1a(void *args) {
+void Core0b(void *args) {
   while (1) {
     delay(1);
     set_current[0] = motor[0] -> calc_current(); 
     set_current[1] = motor[1] -> calc_current(); 
     set_current[2] = motor[2] -> calc_current(); 
+    set_current[3] = motor[3] -> calc_current(); 
     can_send();
   }
 }
@@ -105,6 +106,8 @@ void setup() {
   M5.begin(true,false,true,false);
   delay(50);
 
+  Serial.begin(115200);
+
   //can init
   mcp2515.reset();
   mcp2515.setBitrate(CAN_1000KBPS, MCP_8MHZ);
@@ -118,10 +121,12 @@ void setup() {
   M5.Lcd.print("not connected");
   delay(10);
 
+  Serial.println("Hello!!!!!!");
   //モーターのPIDゲインと変換パラメータ設定してインスタンス生成
-  for (size_t i = 0; i < NoM; i++){
-    motor[i*2]   = new DJI_mController(mm_to_pulse_Pos, 0.1, 0, 0.1); //mm_to_pulse_Pos
-    motor[i*2+1] = new DJI_mController(mm_to_pulse_Mov, 0.1, 0, 0.1); 
+  for (size_t i = 0; i < NoM/2; i++){
+    Serial.println(i);
+    motor[i*2]   = new DJI_mController(mm_to_pulse_Pos, 0.1, 0, 0.0); //mm_to_pulse_Pos
+    motor[i*2+1] = new DJI_mController(mm_to_pulse_Mov, 0.1, 0, 0.0); 
   }
 
   Serial.print("can connecting");
@@ -133,8 +138,8 @@ void setup() {
   Serial.println("OK");
 
   //マルチタスク設定
-  xTaskCreateUniversal(Core0a,"Core0a",8192,NULL,1,NULL,PRO_CPU_NUM);
-  xTaskCreateUniversal(Core1a,"Core1a",8192,NULL,1,NULL,APP_CPU_NUM);
+  xTaskCreateUniversal(Core0,"Core0",8192,NULL,1,NULL,PRO_CPU_NUM);
+  xTaskCreateUniversal(Core0b,"Core0b",8192,NULL,1,NULL,APP_CPU_NUM);
 
   M5.Lcd.fillScreen(WHITE);
   M5.Lcd.setCursor(115,210);
@@ -157,9 +162,10 @@ void setup() {
 
 //メインループ定義
 void loop() {
+
   if(M5.BtnA.read() == 1){
-    motor[0]   -> set_trg(gm_max_cur*0.1, 300);
-    motor[1]   -> set_trg(gm_max_cur*0.1, 300);
+    motor[0]   -> set_trg(gm_max_cur*0.8, 400);
+    //motor[1]   -> set_trg(gm_max_cur*0.1, 300);
     while(M5.BtnA.read()){
       delay(10);
     }
@@ -177,10 +183,13 @@ void loop() {
   }
 
   if(M5.BtnC.read() == 1){
-    motor[0]   -> set_trg(gm_max_cur*0.1, 0);
-    motor[1]   -> set_trg(gm_max_cur*0.1, 0);
+    motor[0]   -> set_trg(gm_max_cur*0.8, 50);
+    //motor[1]   -> set_trg(gm_max_cur*0.1, 0);
     while(M5.BtnC.read()){
       delay(10);
     }
   }
+
+  Serial.printf("%3.1f   %3.1f   %3.1f   %3.1f\n", motor[0] -> get_pos(), motor[1] -> get_pos(), motor[2] -> get_pos(), motor[3] -> get_pos());
+  delay(50);
 }

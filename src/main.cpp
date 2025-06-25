@@ -28,6 +28,11 @@ const double gear = 36.1;
 const double mm_to_pulse_Pos = 2/d2 *d2/d1*gear *8192/PI2;
 const double mm_to_pulse_Mov = 2/d3 *d2/d1 *gear *8192/PI2;
 
+//変数及び制御パラメータ
+bool moving = false;
+float trgPos[] = {0,0,0,0};
+float speed[] = {200, 100, 200, 100};
+
 
 //--------------------------------------------------------
 //   以下，関数定義
@@ -73,7 +78,7 @@ void drawLCD(){
   M5.Lcd.printf("id, pos, mov  ");
 
   M5.Lcd.setCursor(35,210);
-  M5.Lcd.print("push          pull");
+  M5.Lcd.print("A     B     C");
 }
 
 //一定速度でモーター1個動作させるための関数
@@ -100,8 +105,19 @@ void moveShelfs(float trgPos_[], float speed[], int ID_){
   }
 }
 
+//移動完了判定関数
+bool moveCmp(float trgPos_[]){
+  bool cmpFlg = true;
+  for(int i = 0; i < NoM; i++){
+    if(fabs(trgPos_[i] - motor[i] -> get_pos()) > 10.0 ){
+      cmpFlg = false;
+    }
+  }
+  return cmpFlg;
+}
+
 //コア0のスレッドa
-void Core0(void *args){
+void Core0a(void *args){
   while (1) {
     delayMicroseconds(1);
     can_read();
@@ -109,7 +125,7 @@ void Core0(void *args){
 }
 
 //コア1のスレッドa
-void Core0b(void *args) {
+void Core1a(void *args) {
   while (1) {
     delay(1);
     set_current[0] = motor[0] -> calc_current(); 
@@ -120,6 +136,17 @@ void Core0b(void *args) {
   }
 }
 
+//コア1のスレッドb
+void Core1b(void *args) {
+  while (1) {
+    delay(1);
+    if(moving){
+      moveShelfs(trgPos, speed, 0);
+      moveShelfs(trgPos, speed, 1);
+      moving = false;
+    }
+  }
+}
 
 //--------------------------------------------------------
 //   以下，セットアップとメインループ
@@ -145,7 +172,6 @@ void setup() {
   M5.Lcd.print("not connected");
   delay(10);
 
-  Serial.println("Hello!!!!!!");
   //モーターのPIDゲインと変換パラメータ設定してインスタンス生成
   for (size_t i = 0; i < NoM/2; i++){
     Serial.println(i);
@@ -159,11 +185,12 @@ void setup() {
     if(M5.BtnB.read()==HIGH)break;
     Serial.print(".");
   }
-  Serial.println("OK");
+  Serial.println("CAN is OK");
 
   //マルチタスク設定
-  xTaskCreateUniversal(Core0,"Core0",8192,NULL,1,NULL,PRO_CPU_NUM);
-  xTaskCreateUniversal(Core0b,"Core0b",8192,NULL,1,NULL,APP_CPU_NUM);
+  xTaskCreateUniversal(Core0a,"Core0a",8192,NULL,1,NULL,PRO_CPU_NUM);
+  xTaskCreateUniversal(Core1a,"Core1a",8192,NULL,1,NULL,APP_CPU_NUM);
+  xTaskCreateUniversal(Core1b,"Core1b",8192,NULL,2,NULL,APP_CPU_NUM);
 
   M5.Lcd.fillScreen(WHITE);
   M5.Lcd.setCursor(115,210);
@@ -185,25 +212,17 @@ void setup() {
 }
 
 
-float trgPos[] = {0,0,0,0};
-float speed[] = {200, 100, 100, 100};
-
 //メインループ定義
 void loop() {
-
+  //ボタンAが押されたとき
   if(M5.BtnA.read() == 1){
-    
-    // trgPos[0] = 500;
-    // moveShelfs(*motor, trgPos, speed, 0);
-
-    trgPos[1] = 200;
-    moveShelfs(trgPos, speed, 1);
-
+    trgPos[1] = 150;
+    moving = true;
     while(M5.BtnA.read()){
       delay(10);
     }
   }
-
+  //ボタンBが押されたとき
   if(M5.BtnB.read() == 1){
     motor[0]   -> stop();
     motor[1]   -> stop();
@@ -214,13 +233,18 @@ void loop() {
       delay(10);
     }
   }
-
+  //ボタンCが押されたとき
   if(M5.BtnC.read() == 1){
-    trgPos[0] = 100;
-    moveShelfs(trgPos, speed, 0);
+    trgPos[0] = 300;
+    moving = true;
     while(M5.BtnC.read()){
       delay(10);
     }
+  }
+
+  //動作完了判定
+  if(moveCmp(trgPos)){
+    Serial.println(">>[INFO] move completed!!");
   }
 
   Serial.printf("%3.1f   %3.1f   %3.1f   %3.1f\n", motor[0] -> get_pos(), motor[1] -> get_pos(), motor[2] -> get_pos(), motor[3] -> get_pos());

@@ -40,6 +40,7 @@ int16_t rcvData[4];
 uint8_t rcvBinary[3];
 long sendTime = 0;
 int cnt = 0;
+bool emgFromRTC = false;
 
 //送信データ配列
 uint8_t packetData[10] = {255,0,0,0,0,0,0,0,0,0};
@@ -111,6 +112,10 @@ void moveShelfs(float trgPos_[], float speed[], int ID_){//IDはモーターのI
   float tg_pos;
   float startPos = motor[ID_] ->get_pos();
   for (size_t i = 1; i <= samples; i++){
+    while(emgButton){
+      delay(1);
+      myTimer += 1;
+    }
     tg_pos = startPos + (trgPos_[ID_] - startPos)* i/samples;
     //printf("i = %4d, tg_pos = %4.1f\n", i, tg_pos);
     motor[ID_]  -> set_trg(gm_max_cur*0.3, tg_pos);
@@ -147,10 +152,7 @@ void updateTrg(int16_t rcvData_[]){
     trgPos[2] = 350;
   }
   else if(id == 8){
-    motor[0]   -> stop();
-    motor[1]   -> stop();
-    motor[2]   -> stop();
-    motor[3]   -> stop();
+    emgFromRTC = true;
   }
   else{
     //dont update
@@ -159,7 +161,7 @@ void updateTrg(int16_t rcvData_[]){
 
 //送信データ更新関数
 void updatePacket(){
-  for(int i = 0; i < SHLEL_NUM-4; i++){
+  for(int i = 0; i < SHELF_NUM-4; i++){
     float posError = trgPos[i*2] - motor[i*2] -> get_pos();
     float movError = trgPos[i*2+1] - motor[i*2+1] -> get_pos();
     if(posError > OK_ERROR || movError > OK_ERROR){
@@ -186,7 +188,7 @@ void updatePacket(){
 }
 
 //シリアル送信関数
-void serialWritePacket(int8_t packetData_[]){
+void serialWritePacket(u_int8_t packetData_[]){
   for(int i = 0; i < 10; i++){
       Serial.write(packetData_[i]);
   }
@@ -222,6 +224,13 @@ void Core1b(void *args) {
       moveShelfs(trgPos, speed, 2);
       moveShelfs(trgPos, speed, 3);
       moving = false;
+      if(emgFromRTC){
+        motor[0] -> stop();
+        motor[1] -> stop();
+        motor[2] -> stop();
+        motor[3] -> stop(); 
+        emgFromRTC = false;
+      }
     }
   }
 }
@@ -350,22 +359,43 @@ void loop() {
     rcv = true;
     cnt = 0;
     // 表示更新
-    M5.Lcd.fillRect(0, 80, 320, 20, BLACK);  // 黒でクリア
+    M5.Lcd.setCursor(0,80);
+    M5.Lcd.fillRect(0,80,320,120,WHITE);
+    M5.Lcd.printf("ID: %d, tPos: %d, tMov: %d, LED: %d", rcvData[0],rcvData[1],rcvData[2],rcvData[3]);
     while (Serial.available() > 0) {
       Serial.read();// 残っているバイトを読み捨てる
     }
 
     //目標値配列の更新
     updateTrg(rcvData);
+    moving = true;
   }
 
   //シリアル送信処理
-  if(millis() - sendTime > 1000){
+  if(millis() - sendTime > 500){
     //送信データ更新
     updatePacket();
     //送信
     serialWritePacket(packetData);
     sendTime = millis();
+  }
+
+  //非常停止ボタン読み取り
+  if(analogRead(36) == LOW){
+    emgButton = true;
+    motor[0]   -> stop();
+    motor[1]   -> stop();
+    motor[2]   -> stop();
+    motor[3]   -> stop();
+    // M5.Lcd.setCursor(0,130);
+    // M5.Lcd.fillRect(0,130,320,170,WHITE);
+    // M5.Lcd.print("EMG!!");
+  }
+  else{
+    emgButton = false;
+    // M5.Lcd.setCursor(0,130);
+    // M5.Lcd.fillRect(0,130,320,170,WHITE);
+    // M5.Lcd.print("NOT EMG");
   }
 
   //Serial.printf("%3.1f   %3.1f   %3.1f   %3.1f\n", motor[0] -> get_pos(), motor[1] -> get_pos(), motor[2] -> get_pos(), motor[3] -> get_pos());

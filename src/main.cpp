@@ -30,8 +30,8 @@ const double mm_to_pulse_Mov = 2/d3 *d2/d1 *gear *8192/PI2;
 
 //制御モータ制御関連パラメータ
 bool moving = false;
-float trgPos[] = {0,0,0,0};
-float speed[] = {200, 100, 200, 100};
+float trgPos[] = {0,0,0,0}; //初期値
+float speed[] = {200, 100, 200, 100}; //定数
 
 //UART通信関係変数
 bool rcv = false;
@@ -42,7 +42,11 @@ long sendTime = 0;
 int cnt = 0;
 
 //送信データ配列
-uint8_t sendData[10];
+uint8_t packetData[10] = {255,0,0,0,0,0,0,0,0,0};
+const int SHELF_NUM = 6;
+float OK_ERROR = 10;
+uint8_t ledMode = 0;
+uint8_t emgButton = 0;
 
 //作業完了状態配列
 
@@ -95,7 +99,7 @@ void drawLCD(){
 }
 
 //一定速度でモーター1個動作させるための関数
-void moveShelfs(float trgPos_[], float speed[], int ID_){
+void moveShelfs(float trgPos_[], float speed[], int ID_){//IDはモーターのID，0～4
   float dif = trgPos_[ID_] - motor[ID_] -> get_pos();
   //Serial.printf("trgPos = %5.1f, crtPos = %5.1f, dif = %5.1f \n", trgPos_[ID_], motor[ID_] -> get_pos(), dif);
   float step_size = 1.0;//mm
@@ -118,15 +122,74 @@ void moveShelfs(float trgPos_[], float speed[], int ID_){
   }
 }
 
-//移動完了判定関数
-bool moveCmp(float trgPos_[]){
-  bool cmpFlg = true;
-  for(int i = 0; i < NoM; i++){
-    if(fabs(trgPos_[i] - motor[i] -> get_pos()) > 10.0 ){
-      cmpFlg = false;
+//棚動作目標値更新関数
+void updateTrg(int16_t rcvData_[]){
+  int id = rcvData_[0];
+  if(id == 0){
+    trgPos[0] = rcvData[1];
+    trgPos[1] += rcvData[2];
+  }
+  else if(id == 1){
+    trgPos[2] = rcvData[1];
+    trgPos[3] += rcvData[2];
+  }
+  else if(id >= 2 && id <= 5){
+    //dont update
+  }
+  else if(id == 6){
+    trgPos[0] = 0;
+    trgPos[1] = 0;
+    trgPos[2] = 0;
+    trgPos[3] = 0;
+  }
+  else if(id == 7){
+    trgPos[0] = 350;
+    trgPos[2] = 350;
+  }
+  else if(id == 8){
+    motor[0]   -> stop();
+    motor[1]   -> stop();
+    motor[2]   -> stop();
+    motor[3]   -> stop();
+  }
+  else{
+    //dont update
+  }
+}
+
+//送信データ更新関数
+void updatePacket(){
+  for(int i = 0; i < SHLEL_NUM-4; i++){
+    float posError = trgPos[i*2] - motor[i*2] -> get_pos();
+    float movError = trgPos[i*2+1] - motor[i*2+1] -> get_pos();
+    if(posError > OK_ERROR || movError > OK_ERROR){
+      packetData[i+1] = 1;
+    }
+    else{
+      packetData[i+1] = 0;
     }
   }
-  return cmpFlg;
+  packetData[7] = emgButton;
+  packetData[8] = ledMode;
+  if(rcv == true && cnt < 3){
+    packetData[9] = 1;
+    cnt++;
+  }
+  else if(rcv == true && cnt >= 3){
+    rcv = false;
+    cnt++;
+    packetData[9] = 0;
+  }
+  else{
+    packetData[9] = 0;
+  }
+}
+
+//シリアル送信関数
+void serialWritePacket(int8_t packetData_[]){
+  for(int i = 0; i < 10; i++){
+      Serial.write(packetData_[i]);
+  }
 }
 
 //コア0のスレッドa
@@ -159,10 +222,6 @@ void Core1b(void *args) {
       moveShelfs(trgPos, speed, 2);
       moveShelfs(trgPos, speed, 3);
       moving = false;
-      motor[1] -> set_pos(0);
-      motor[1] -> set_trg(0,0);
-      motor[3] -> set_pos(0);
-      motor[3] -> set_trg(0,0);
     }
   }
 }
@@ -287,8 +346,8 @@ void loop() {
       uint16_t low  = ((rcvBinary[1] << 7) | rcvBinary[2]) & 0xFF;
       rcvData[i] = (high << 8) | low;
     }
-    rcv = true;
     findHeader = false;
+    rcv = true;
     cnt = 0;
     // 表示更新
     M5.Lcd.fillRect(0, 80, 320, 20, BLACK);  // 黒でクリア
@@ -296,61 +355,16 @@ void loop() {
       Serial.read();// 残っているバイトを読み捨てる
     }
 
-    // モーター目標値登録や表示灯の設定など
-    int id = rcvData[0];
-    trgPos[id*2] = rcvData[1];
-    trgPos[id*2+1] = rcvData[2];
-    moving = true;
+    //目標値配列の更新
+    updateTrg(rcvData);
   }
-
-  //作業状態配列を更新
 
   //シリアル送信処理
   if(millis() - sendTime > 1000){
-    //各棚の状態と非常停止押下状態の送信
-    uint16_t sendData[10];
-    if(rcv && cnt < 2){
-      sendData[0] = 255;
-      sendData[1] = 1;
-      sendData[2] = 1;
-      sendData[3] = 1;
-      sendData[4] = 1;
-      sendData[5] = 1;
-      sendData[6] = 1;
-      sendData[7] = 0;
-      sendData[8] = 0;
-      sendData[9] = 1;
-      cnt++;
-    }
-    else if(rcv && cnt >= 2 && cnt < 4){
-      sendData[0] = 255;
-      sendData[1] = 1;
-      sendData[2] = 1;
-      sendData[3] = 1;
-      sendData[4] = 1;
-      sendData[5] = 1;
-      sendData[6] = 1;
-      sendData[7] = 0;
-      sendData[8] = 0;
-      sendData[9] = 0;
-      cnt++;
-    }
-    else{
-      sendData[0] = 255;
-      sendData[1] = 0;
-      sendData[2] = 0;
-      sendData[3] = 0;
-      sendData[4] = 0;
-      sendData[5] = 0;
-      sendData[6] = 0;
-      sendData[7] = 0;
-      sendData[8] = 0;
-      sendData[9] = 0;
-    }
-    
-    for(int i = 0; i < 10; i++){
-      Serial.write(sendData[i]);
-    }
+    //送信データ更新
+    updatePacket();
+    //送信
+    serialWritePacket(packetData);
     sendTime = millis();
   }
 

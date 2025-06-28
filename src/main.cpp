@@ -1,5 +1,11 @@
 #include <Arduino.h>
 #include <M5Stack.h>
+#include <Adafruit_NeoPixel.h>
+
+// NeoPixelの設定
+#define PIN        5        // NeoPixelが接続されているGPIOピン（例: GPIO15）
+#define NUMPIXELS  4       // LEDの数
+Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
 
 //DJI制御ライブラリ
 #include <dji_mController.h>
@@ -44,12 +50,14 @@ bool emgFromRTC = false;
 
 //送信データ配列
 uint8_t packetData[10] = {255,0,0,0,0,0,0,0,0,0};
+
+//その他必要なグローバル変数やフラグ
 const int SHELF_NUM = 6;
 float OK_ERROR = 10;
 uint8_t ledMode = 0;
+bool ledUpdate = false;
+bool isBlinking = false;
 uint8_t emgButton = 0;
-
-//作業完了状態配列
 
 
 //--------------------------------------------------------
@@ -164,7 +172,7 @@ void updatePacket(){
   for(int i = 0; i < SHELF_NUM-4; i++){
     float posError = trgPos[i*2] - motor[i*2] -> get_pos();
     float movError = trgPos[i*2+1] - motor[i*2+1] -> get_pos();
-    if(posError > OK_ERROR || movError > OK_ERROR){
+    if(fabs(posError) > OK_ERROR || fabs(movError > OK_ERROR)){
       packetData[i+1] = 1;
     }
     else{
@@ -194,7 +202,7 @@ void serialWritePacket(u_int8_t packetData_[]){
   }
 }
 
-//コア0のスレッドa
+//コア0のスレッドa　※CAN受信
 void Core0a(void *args){
   while (1) {
     delayMicroseconds(1);
@@ -202,7 +210,7 @@ void Core0a(void *args){
   }
 }
 
-//コア1のスレッドa
+//コア1のスレッドa　※CAN送信
 void Core1a(void *args) {
   while (1) {
     delay(1);
@@ -214,7 +222,7 @@ void Core1a(void *args) {
   }
 }
 
-//コア1のスレッドb
+//コア1のスレッドb　※モーター動作
 void Core1b(void *args) {
   while (1) {
     delay(1);
@@ -235,6 +243,43 @@ void Core1b(void *args) {
   }
 }
 
+//コア1のスレッドc　※表示灯制御
+void Core1c(void *args){
+  while(1){
+    delay(1);
+    if(ledUpdate){
+      if(ledMode == 0){
+        for(int i=0; i<NUMPIXELS; i++) {
+          pixels.setPixelColor(i, pixels.Color(0, 0, 255)); // 青点灯
+        }
+      }
+      else if(ledMode == 1){
+        for(int i=0; i<NUMPIXELS; i++) {
+          pixels.setPixelColor(i, pixels.Color(0, 255, 0)); // 緑点灯
+        }
+      }
+      else if(ledMode == 2){
+        for(int i=0; i<NUMPIXELS; i++) {
+          pixels.setPixelColor(i, pixels.Color(255, 255, 0)); // 黄点灯
+        }
+      }
+      else if(ledMode == 3){
+        for(int i=0; i<NUMPIXELS; i++) {
+          pixels.setPixelColor(i, pixels.Color(255, 0, 0)); // 赤点灯
+        }
+      }
+      else if(ledMode == 4){
+        for(int i=0; i<NUMPIXELS; i++) {
+          pixels.setPixelColor(i, pixels.Color(255, 0, 255)); // 紫点灯
+        }
+      }
+      pixels.show();
+      delay(500);
+      ledUpdate = false;
+    }
+  }
+}
+
 //--------------------------------------------------------
 //   以下，セットアップとメインループ
 //--------------------------------------------------------
@@ -243,6 +288,16 @@ void Core1b(void *args) {
 void setup() {
   M5.begin(true,false,true,false);
   delay(50);
+
+  // NeoPixelのセットアップ
+  pixels.begin(); 
+  pixels.clear(); // 全LEDを消灯
+  for(int i=0; i<NUMPIXELS; i++) {
+      pixels.setPixelColor(i, pixels.Color(255, 255, 255)); // 白点灯
+      pixels.setBrightness(70);//明るさ70% ?
+  }
+  pixels.show();  // 状態を反映
+  delay(1000);
 
   //UART通信のセットアップ
   Serial.begin(115200);
@@ -279,6 +334,7 @@ void setup() {
   xTaskCreateUniversal(Core0a,"Core0a",8192,NULL,1,NULL,PRO_CPU_NUM);
   xTaskCreateUniversal(Core1a,"Core1a",8192,NULL,1,NULL,APP_CPU_NUM);
   xTaskCreateUniversal(Core1b,"Core1b",8192,NULL,2,NULL,APP_CPU_NUM);
+  xTaskCreateUniversal(Core1c,"Core1c",8192,NULL,3,NULL,APP_CPU_NUM);
 
   M5.Lcd.fillScreen(WHITE);
   M5.Lcd.setCursor(115,210);
@@ -358,6 +414,7 @@ void loop() {
     findHeader = false;
     rcv = true;
     cnt = 0;
+
     // 表示更新
     M5.Lcd.setCursor(0,80);
     M5.Lcd.fillRect(0,80,320,120,WHITE);
@@ -369,6 +426,12 @@ void loop() {
     //目標値配列の更新
     updateTrg(rcvData);
     moving = true;
+
+    //LEDのモード変更をチェック
+    if(rcvData[4] != ledMode){
+      ledUpdate = true;
+      ledMode = rcvData[4]; 
+    }
   }
 
   //シリアル送信処理
@@ -387,15 +450,9 @@ void loop() {
     motor[1]   -> stop();
     motor[2]   -> stop();
     motor[3]   -> stop();
-    // M5.Lcd.setCursor(0,130);
-    // M5.Lcd.fillRect(0,130,320,170,WHITE);
-    // M5.Lcd.print("EMG!!");
   }
   else{
     emgButton = false;
-    // M5.Lcd.setCursor(0,130);
-    // M5.Lcd.fillRect(0,130,320,170,WHITE);
-    // M5.Lcd.print("NOT EMG");
   }
 
   //Serial.printf("%3.1f   %3.1f   %3.1f   %3.1f\n", motor[0] -> get_pos(), motor[1] -> get_pos(), motor[2] -> get_pos(), motor[3] -> get_pos());

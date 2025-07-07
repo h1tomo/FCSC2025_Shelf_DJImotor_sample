@@ -37,7 +37,7 @@ const double mm_to_pulse_Mov = 2/d3 *d2/d1 *gear *8192/PI2;
 //制御モータ制御関連パラメータ
 bool moving = false;
 float trgPos[] = {0,0,0,0}; //初期値
-float speed[] = {200, 100, 200, 100}; //定数
+float speed[] = {125, 100, 125, 100}; //定数
 
 //UART通信関係変数
 bool rcv = false;
@@ -55,9 +55,18 @@ uint8_t packetData[10] = {255,0,0,0,0,0,0,0,0,0};
 const int SHELF_NUM = 6;
 float OK_ERROR = 10;
 uint8_t ledMode = 0;
+uint8_t beforeLED = 0;
 bool ledUpdate = false;
 bool isBlinking = false;
 uint8_t emgButton = 0;
+
+//表示灯関係の変数
+int rVal = 0;
+int gVal = 0;
+int bVal = 0;
+long timeNow = 0;
+long timeThen = 0;
+bool isTuenOn = false;
 
 
 //--------------------------------------------------------
@@ -120,7 +129,7 @@ void moveShelfs(float trgPos_[], float speed[], int ID_){//IDはモーターのI
   float tg_pos;
   float startPos = motor[ID_] ->get_pos();
   for (size_t i = 1; i <= samples; i++){
-    while(emgButton){
+    while(emgButton || emgFromRTC){
       delay(1);
       myTimer += 1;
     }
@@ -140,11 +149,13 @@ void updateTrg(int16_t rcvData_[]){
   int id = rcvData_[0];
   if(id == 0){
     trgPos[0] = rcvData[1];
-    trgPos[1] += rcvData[2];
+    trgPos[1] -= rcvData[2];
+    emgFromRTC = false;
   }
   else if(id == 1){
     trgPos[2] = rcvData[1];
-    trgPos[3] += rcvData[2];
+    trgPos[3] -= rcvData[2];
+    emgFromRTC = false;
   }
   else if(id >= 2 && id <= 5){
     //dont update
@@ -154,10 +165,12 @@ void updateTrg(int16_t rcvData_[]){
     trgPos[1] = 0;
     trgPos[2] = 0;
     trgPos[3] = 0;
+    emgFromRTC = false;
   }
   else if(id == 7){
     trgPos[0] = 350;
     trgPos[2] = 350;
+    emgFromRTC = false;
   }
   else if(id == 8){
     emgFromRTC = true;
@@ -174,6 +187,10 @@ void updatePacket(){
     float movError = trgPos[i*2+1] - motor[i*2+1] -> get_pos();
     if(fabs(posError) > OK_ERROR || fabs(movError > OK_ERROR)){
       packetData[i+1] = 1;
+      if(!moving){
+        trgPos[i*2] = motor[i*2] -> get_pos();
+        trgPos[i*2+1] = motor[i*2+1] -> get_pos();
+      }
     }
     else{
       packetData[i+1] = 0;
@@ -202,6 +219,25 @@ void serialWritePacket(u_int8_t packetData_[]){
   }
 }
 
+//表示灯色設定関数
+void setLEDColor(int ledMode_){
+  if(ledMode_ == 0){
+    rVal = 0; gVal = 0; bVal = 255;
+  }
+  else if (ledMode_ == 1 || ledMode_ == 2){
+    rVal = 0; gVal = 255; bVal = 0;
+  }
+  else if (ledMode_ == 3){
+    rVal = 255; gVal = 255; bVal = 0;
+  }
+  else if (ledMode_ == 4){
+    rVal = 255; gVal = 0; bVal = 0;
+  }
+  else{
+    rVal = 255; gVal = 0; bVal = 255;
+  }
+}
+
 //コア0のスレッドa　※CAN受信
 void Core0a(void *args){
   while (1) {
@@ -214,6 +250,12 @@ void Core0a(void *args){
 void Core1a(void *args) {
   while (1) {
     delay(1);
+    if(emgFromRTC || emgButton){
+      motor[0] -> stop();
+      motor[1] -> stop();
+      motor[2] -> stop();
+      motor[3] -> stop(); 
+    }
     set_current[0] = motor[0] -> calc_current(); 
     set_current[1] = motor[1] -> calc_current(); 
     set_current[2] = motor[2] -> calc_current(); 
@@ -232,13 +274,6 @@ void Core1b(void *args) {
       moveShelfs(trgPos, speed, 2);
       moveShelfs(trgPos, speed, 3);
       moving = false;
-      if(emgFromRTC){
-        motor[0] -> stop();
-        motor[1] -> stop();
-        motor[2] -> stop();
-        motor[3] -> stop(); 
-        emgFromRTC = false;
-      }
     }
   }
 }
@@ -247,35 +282,42 @@ void Core1b(void *args) {
 void Core1c(void *args){
   while(1){
     delay(1);
+    //led更新
     if(ledUpdate){
-      if(ledMode == 0){
-        for(int i=0; i<NUMPIXELS; i++) {
-          pixels.setPixelColor(i, pixels.Color(0, 0, 255)); // 青点灯
-        }
-      }
-      else if(ledMode == 1){
-        for(int i=0; i<NUMPIXELS; i++) {
-          pixels.setPixelColor(i, pixels.Color(0, 255, 0)); // 緑点灯
-        }
-      }
-      else if(ledMode == 2){
-        for(int i=0; i<NUMPIXELS; i++) {
-          pixels.setPixelColor(i, pixels.Color(255, 255, 0)); // 黄点灯
-        }
-      }
-      else if(ledMode == 3){
-        for(int i=0; i<NUMPIXELS; i++) {
-          pixels.setPixelColor(i, pixels.Color(255, 0, 0)); // 赤点灯
-        }
-      }
-      else if(ledMode == 4){
-        for(int i=0; i<NUMPIXELS; i++) {
-          pixels.setPixelColor(i, pixels.Color(255, 0, 255)); // 紫点灯
-        }
+      setLEDColor(ledMode);
+      for(int i = 0; i < NUMPIXELS; i++){
+        pixels.setPixelColor(i, pixels.Color(rVal, gVal, bVal));
       }
       pixels.show();
-      delay(500);
       ledUpdate = false;
+    }
+
+    //点滅切替
+    if(ledMode == 0 || ledMode == 1 || ledMode == 4 || ledMode == 5){
+      isBlinking = false;
+    }
+    else{
+      isBlinking = true;
+    }
+
+    //点滅時
+    if(isBlinking){
+      timeNow = millis();
+      if((timeNow - timeThen) > 500){
+        timeThen = timeNow;
+        isTuenOn = !isTuenOn;
+        if(isTuenOn){
+          for(int i = 0; i < NUMPIXELS; i++){
+            pixels.setPixelColor(i, rVal, gVal, bVal);
+          }
+        }
+        else{
+          for(int i = 0; i < NUMPIXELS; i++){
+            pixels.setPixelColor(i, 0, 0, 0);
+          }
+        }
+        pixels.show();
+      }
     }
   }
 }
@@ -360,15 +402,28 @@ void setup() {
 void loop() {
   //ボタンAが押されたとき
   if(M5.BtnA.read() == 1){
-    trgPos[0] = 300;
-    trgPos[1] = 150;
-    trgPos[2] = 300;
-    trgPos[3] = 150;
+    trgPos[0] = 560;
+    trgPos[1] = -100;
+    trgPos[2] = 560;
+    trgPos[3] = -100;
     moving = true;
     while(M5.BtnA.read()){
       delay(10);
     }
   }
+
+  // //ボタンAが押されたとき
+  // if(M5.BtnA.read() == 1){
+  //   ledMode += 1;
+  //   if(ledMode > 5){
+  //     ledMode = 0;
+  //   }
+  //   ledUpdate = true;
+  //   while(M5.BtnA.read()){
+  //     delay(10);
+  //   }
+  // }
+
   //ボタンBが押されたとき
   if(M5.BtnB.read() == 1){
     motor[0]   -> stop();
@@ -383,9 +438,9 @@ void loop() {
   //ボタンCが押されたとき
   if(M5.BtnC.read() == 1){
     trgPos[0] = 0;
-    trgPos[1] = -150;
+    trgPos[1] = 0;
     trgPos[2] = 0;
-    trgPos[3] = -150;
+    trgPos[3] = 0;
     moving = true;
     while(M5.BtnC.read()){
       delay(10);
@@ -445,6 +500,11 @@ void loop() {
 
   //非常停止ボタン読み取り
   if(analogRead(36) == LOW){
+    if(emgButton == false){
+      ledUpdate = true;
+      beforeLED = ledMode;
+      ledMode = 4;
+    }
     emgButton = true;
     motor[0]   -> stop();
     motor[1]   -> stop();
@@ -452,9 +512,17 @@ void loop() {
     motor[3]   -> stop();
   }
   else{
+    if(emgButton == true){
+      ledUpdate = true;
+      ledMode = beforeLED;
+    }
     emgButton = false;
   }
 
   //Serial.printf("%3.1f   %3.1f   %3.1f   %3.1f\n", motor[0] -> get_pos(), motor[1] -> get_pos(), motor[2] -> get_pos(), motor[3] -> get_pos());
+  Serial.printf("%3.1f   %3.1f\n", motor[0] -> get_pos(), motor[0] -> get_cur());
+  // M5.Lcd.setCursor(0,10);
+  // M5.Lcd.fillRect(0,10,320,50,WHITE);
+  // M5.Lcd.printf("tPos: %3.1f, cPos: %3.1f", trgPos[0],motor[0] -> get_pos());
   delay(50);
 }
